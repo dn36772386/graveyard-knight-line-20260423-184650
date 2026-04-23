@@ -241,6 +241,27 @@
     const FRICTION = 0.84;
     const MAX_LIVES = 4;
 
+    const bgmNotes = [
+      ["C#5", 0.20, 0.19],
+      ["D#5", 0.39, 0.20],
+      ["E5", 0.59, 1.19],
+      ["D#5", 1.78, 0.191],
+      ["E5", 1.97, 0.20],
+      ["F#5", 2.17, 0.99],
+      ["E5", 3.16, 0.20],
+      ["F#5", 3.36, 0.39],
+      ["G#5", 3.75, 0.79],
+      ["F#5", 4.54, 0.39],
+      ["E5", 4.93, 0.20],
+      ["C#5", 5.13, 1.19],
+      ["D#5", 6.32, 0.19],
+      ["E5", 6.51, 1.19],
+      ["D#5", 7.70, 0.19],
+      ["E5", 7.89, 0.20],
+      ["F#5", 8.09, 1.581],
+      ["G#5", 9.67, 1.581]
+    ];
+
     const frames = {
       idle: { sx: 26, sy: 112, sw: 240, sh: 290, ox: 0, oy: 0, dw: 130, dh: 156 },
       runA: { sheet: "run", sx: 0, sy: 0, sw: 270, sh: 190, ox: 0, oy: 2, dw: 166, dh: 118 },
@@ -297,6 +318,13 @@
     let platforms = [];
     let enemies = [];
     let pickups = [];
+    let audioContext = null;
+    let bgmMaster = null;
+    let bgmTimer = null;
+    let bgmStarted = false;
+    let bgmLoopStartAt = 0;
+    let bgmLoopIndex = 0;
+    let bgmLoopLength = 10;
 
     const player = {
       x: 72,
@@ -435,6 +463,7 @@
 
     function startRun() {
       if (state === "loading") return;
+      startBgm();
       if (state === "title" || state === "lost" || state === "won") {
         resetGame();
         state = "playing";
@@ -446,6 +475,7 @@
       const action = keys.get(event.code);
       if (!action) return;
       event.preventDefault();
+      if (action === "jump" || action === "attack" || action === "restart") startBgm();
       if (action === "jump") {
         input.jumpQueued = true;
         input.up = true;
@@ -484,6 +514,7 @@
         event.preventDefault();
         button.setPointerCapture(event.pointerId);
         setDown(true);
+        if (tap === "jump" || tap === "attack") startBgm();
         if (tap === "jump") {
           input.jumpQueued = true;
           input.up = true;
@@ -1187,6 +1218,101 @@
         ctx.stroke();
       }
       ctx.restore();
+    }
+
+    function startBgm() {
+      if (bgmStarted) {
+        if (audioContext && audioContext.state === "suspended") audioContext.resume();
+        return;
+      }
+
+      const AudioCtor = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtor) return;
+
+      audioContext = new AudioCtor();
+      bgmMaster = audioContext.createGain();
+      bgmMaster.gain.value = 0.13;
+      bgmMaster.connect(audioContext.destination);
+      bgmStarted = true;
+
+      const notes = smoothBgmNotes(bgmNotes);
+      bgmLoopLength = getBgmLoopLength(notes);
+      bgmLoopStartAt = audioContext.currentTime + 0.08;
+      bgmLoopIndex = 1;
+      scheduleBgmLoop(bgmLoopStartAt, notes);
+      bgmTimer = window.setInterval(() => {
+        while (bgmLoopStartAt + bgmLoopIndex * bgmLoopLength < audioContext.currentTime + bgmLoopLength * 1.8) {
+          scheduleBgmLoop(bgmLoopStartAt + bgmLoopIndex * bgmLoopLength, notes);
+          bgmLoopIndex += 1;
+        }
+      }, 1600);
+    }
+
+    function smoothBgmNotes(notes) {
+      return notes.map(([note, start, duration], index) => {
+        const next = notes[index + 1];
+        const naturalEnd = start + duration;
+        const nextStart = next ? next[1] : naturalEnd;
+        const fill = Math.max(0, nextStart - naturalEnd);
+        const extension = Math.min(0.16, fill + 0.055);
+        return [note, start, duration + extension];
+      });
+    }
+
+    function getBgmLoopLength(notes) {
+      const tailEnd = Math.max(...notes.map(([, start, duration]) => start + duration));
+      return Math.max(10, tailEnd + 0.75);
+    }
+
+    function scheduleBgmLoop(startAt, notes) {
+      for (const [note, start, duration] of notes) {
+        playBgmNote(note, startAt + start, duration);
+      }
+    }
+
+    function playBgmNote(note, startAt, duration) {
+      playBgmLayer(note, startAt, duration, "square", 0, 0.48, 980, 0.045, 0.12);
+      playBgmLayer(note, startAt + 0.012, duration * 1.02, "triangle", -10, 0.34, 1450, 0.06, 0.16);
+      playBgmLayer(note, startAt + 0.026, duration * 0.96, "sawtooth", 6, 0.12, 760, 0.075, 0.18);
+      playBgmLayer(note, startAt + 0.13, duration * 0.62, "triangle", -5, 0.09, 1100, 0.035, 0.14);
+    }
+
+    function playBgmLayer(note, startAt, duration, wave, detune, volume, cutoff, attack, release) {
+      if (!audioContext || !bgmMaster) return;
+
+      const osc = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      const filter = audioContext.createBiquadFilter();
+
+      osc.type = wave;
+      osc.frequency.value = noteToFrequency(note);
+      osc.detune.value = detune;
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(cutoff, startAt);
+      filter.frequency.exponentialRampToValueAtTime(Math.max(360, cutoff * 0.58), startAt + Math.max(0.08, duration));
+      filter.Q.value = 1.1;
+
+      gain.gain.setValueAtTime(0.0001, startAt);
+      gain.gain.exponentialRampToValueAtTime(volume, startAt + attack);
+      const sustain = duration > 1.5 ? Math.max(0.11, volume * 0.42) : Math.max(0.035, volume * 0.52);
+      const holdPoint = duration > 1.5 ? duration * 0.9 : duration * 0.72;
+      gain.gain.exponentialRampToValueAtTime(sustain, startAt + Math.max(attack + 0.03, holdPoint));
+      gain.gain.exponentialRampToValueAtTime(0.0001, startAt + Math.max(0.08, duration) + release);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(bgmMaster);
+      osc.start(startAt);
+      osc.stop(startAt + duration + release + 0.04);
+    }
+
+    function noteToFrequency(note) {
+      const match = /^([A-G])(#?)(\d)$/.exec(note);
+      if (!match) return 440;
+      const semitones = { C: -9, D: -7, E: -5, F: -4, G: -2, A: 0, B: 2 };
+      const octave = Number(match[3]);
+      const accidental = match[2] ? 1 : 0;
+      return 440 * Math.pow(2, (semitones[match[1]] + accidental + (octave - 4) * 12) / 12);
     }
 
     function drawHud() {
