@@ -280,11 +280,9 @@
 
     const heroSheet = new Image();
     heroSheet.decoding = "async";
-    heroSheet.src = HERO_SHEET_SRC.startsWith("__HERO_") ? HERO_FALLBACK_SRC : HERO_SHEET_SRC;
 
     const runSheet = new Image();
     runSheet.decoding = "async";
-    runSheet.src = RUN_SHEET_SRC.startsWith("__RUN_") ? RUN_FALLBACK_SRC : RUN_SHEET_SRC;
 
     let state = "loading";
     let assetsLoaded = 0;
@@ -528,6 +526,9 @@
     runSheet.onerror = () => {
       showOverlay("Image Error", "Could not load the running sprite. Try opening index.html instead.");
     };
+
+    heroSheet.src = HERO_SHEET_SRC.startsWith("__HERO_") ? HERO_FALLBACK_SRC : HERO_SHEET_SRC;
+    runSheet.src = RUN_SHEET_SRC.startsWith("__RUN_") ? RUN_FALLBACK_SRC : RUN_SHEET_SRC;
 
     function loop(now) {
       const dt = Math.min(0.033, (now - lastTime) / 1000 || 0);
