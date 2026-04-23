@@ -71,6 +71,7 @@
       width: min(100%, 1040px);
       aspect-ratio: 16 / 9;
       position: relative;
+      touch-action: manipulation;
       border: 1px solid var(--edge);
       border-radius: 18px;
       overflow: hidden;
@@ -229,6 +230,7 @@
     const RUN_FALLBACK_SRC = "run-frames.png";
     const canvas = document.getElementById("game");
     const ctx = canvas.getContext("2d");
+    const stageWrap = document.querySelector(".stage-wrap");
     const overlay = document.getElementById("overlay");
     const overlayTitle = document.getElementById("overlayTitle");
     const overlayText = document.getElementById("overlayText");
@@ -322,6 +324,8 @@
     let bgmMaster = null;
     let bgmTimer = null;
     let bgmStarted = false;
+    let bgmStarting = false;
+    let bgmUnlocked = false;
     let bgmLoopStartAt = 0;
     let bgmLoopIndex = 0;
     let bgmLoopLength = 10;
@@ -538,6 +542,19 @@
         if (tap === "attack") input.attack = false;
       });
     }
+
+    stageWrap.addEventListener("pointerdown", () => {
+      startBgm();
+      if (state !== "playing") {
+        startRun();
+      }
+    }, { passive: true });
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && bgmStarted && audioContext && audioContext.state === "suspended") {
+        audioContext.resume();
+      }
+    });
 
     function onAssetLoaded() {
       assetsLoaded += 1;
@@ -1220,26 +1237,67 @@
       ctx.restore();
     }
 
-    function startBgm() {
-      if (bgmStarted) {
-        if (audioContext && audioContext.state === "suspended") audioContext.resume();
-        return;
-      }
-
+    function ensureBgmContext() {
       const AudioCtor = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtor) return;
+      if (!AudioCtor) return null;
+
+      if (audioContext) return audioContext;
 
       audioContext = new AudioCtor();
       bgmMaster = audioContext.createGain();
       bgmMaster.gain.value = 0.13;
       bgmMaster.connect(audioContext.destination);
+      return audioContext;
+    }
+
+    function unlockBgmAudio() {
+      if (!audioContext || !bgmMaster || bgmUnlocked) return;
+
+      const source = audioContext.createBufferSource();
+      source.buffer = audioContext.createBuffer(1, 1, 22050);
+      source.connect(bgmMaster);
+      source.start(0);
+      bgmUnlocked = true;
+    }
+
+    function startBgm() {
+      const context = ensureBgmContext();
+      if (!context) return;
+
+      unlockBgmAudio();
+      const resumeAttempt = context.state !== "running" && context.resume ? context.resume() : Promise.resolve();
+      if (context.state !== "running" && context.resume) {
+        Promise.resolve(resumeAttempt).catch(() => {});
+      }
+
+      if (bgmStarted || bgmStarting) return;
+      bgmStarting = true;
+
+      Promise.resolve(resumeAttempt)
+        .then(() => {
+          if (!audioContext || bgmStarted) return;
+          if (audioContext.state !== "running") {
+            bgmStarting = false;
+            return;
+          }
+
+          beginBgmPlayback();
+        })
+        .catch(() => {
+          bgmStarting = false;
+        });
+    }
+
+    function beginBgmPlayback() {
+      const notes = smoothBgmNotes(bgmNotes);
+      bgmStarting = false;
       bgmStarted = true;
 
-      const notes = smoothBgmNotes(bgmNotes);
       bgmLoopLength = getBgmLoopLength(notes);
       bgmLoopStartAt = audioContext.currentTime + 0.08;
       bgmLoopIndex = 1;
       scheduleBgmLoop(bgmLoopStartAt, notes);
+      if (bgmTimer) window.clearInterval(bgmTimer);
       bgmTimer = window.setInterval(() => {
         while (bgmLoopStartAt + bgmLoopIndex * bgmLoopLength < audioContext.currentTime + bgmLoopLength * 1.8) {
           scheduleBgmLoop(bgmLoopStartAt + bgmLoopIndex * bgmLoopLength, notes);
